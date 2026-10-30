@@ -39,9 +39,11 @@ Without `ANTHROPIC_API_KEY` the app still works end to end: triage falls back to
 Useful author accounts for edge cases: `ananya.reddy@email.com` (sales, **zero payouts**), `kavita.deshmukh@email.com` (one book **in typesetting**, one with ₹850 pending, **below the ₹1,000 threshold**), `sneha.kulkarni@email.com` (3 books, one in cover design).
 
 ### Deploy (single service, e.g. Render / Railway)
-1. Provision PostgreSQL; set `DATABASE_URL` (and `DATABASE_SSL=true` if required), `JWT_SECRET`, `ANTHROPIC_API_KEY`.
+1. Provision PostgreSQL with your hosting provider or a free external provider such as Supabase or Neon. Set its connection string as `DATABASE_URL` (and `DATABASE_SSL=true` if required), `JWT_SECRET`, and optionally `ANTHROPIC_API_KEY`.
 2. Build: `cd frontend && npm install && npm run build && cd ../backend && npm install`
 3. Start: `cd backend && npm run seed && npm start`. Express serves `frontend/dist` when it exists, so one URL hosts both portals and the API. Same-origin means no CORS configuration.
+
+For Render, the included `render.yaml` creates only the web service. Add the external PostgreSQL connection string as the `DATABASE_URL` environment variable before the first deploy.
 
 Tests: `cd backend && npm test` (classification fallback, payout-window maths, account-facts edge cases, KB sectioning).
 
