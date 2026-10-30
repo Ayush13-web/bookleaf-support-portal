@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: bookleaf-support-portal
+    runtime: node
+    plan: free
+    buildCommand: npm ci --prefix frontend && npm run build --prefix frontend && npm ci --prefix backend
+    startCommand: npm run seed --prefix backend && npm start --prefix backend
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bookleaf-postgres
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 12h
+      - key: CORS_ORIGIN
+        value: https://bookleaf-support-portal.onrender.com
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: claude-haiku-5-5
+      - key: AI_TIMEOUT_MS
+        value: "20000"
+
+databases:
+  - name: bookleaf-postgres
+    plan: free
+    databaseName: bookleaf
+    user: bookleaf
