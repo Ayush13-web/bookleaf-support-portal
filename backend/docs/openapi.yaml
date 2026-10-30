@@ -1,0 +1,118 @@
+openapi: 3.0.3
+info:
+  title: BookLeaf Author Support Portal API
+  version: 1.0.0
+  description: >
+    All routes except /auth/login and /health require `Authorization: Bearer <JWT>`.
+    Errors always have the shape `{ "error": { "code", "message", "details?" } }`.
+servers: [{ url: /api/v1 }]
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties: { code: { type: string }, message: { type: string }, details: {} }
+    Status: { type: string, enum: [Open, In Progress, Resolved, Closed] }
+    Priority: { type: string, enum: [Critical, High, Medium, Low] }
+    Category:
+      type: string
+      enum: [Royalty & Payments, ISBN & Metadata Issues, Printing & Quality, Distribution & Availability, Book Status & Production Updates, General Inquiry]
+  responses:
+    Unauthorized: { description: Missing/invalid token (UNAUTHORIZED), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: Wrong role (FORBIDDEN), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Not found, or not yours (NOT_FOUND), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Validation: { description: Invalid input (VALIDATION_ERROR) with per-field details, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+security: [{ bearer: [] }]
+paths:
+  /health:
+    get: { security: [], summary: Liveness + AI configuration state, responses: { '200': { description: OK } } }
+  /auth/login:
+    post:
+      security: []
+      summary: Email/password login. Rate limited (30 / 15 min / IP).
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string }, password: { type: string } } } } } }
+      responses: { '200': { description: "{ data: { token, user } }" }, '401': { description: INVALID_CREDENTIALS }, '422': { $ref: '#/components/responses/Validation' }, '429': { description: RATE_LIMITED } }
+  /auth/me:
+    get: { summary: Current user, responses: { '200': { description: "{ data: user }" }, '401': { $ref: '#/components/responses/Unauthorized' } } }
+  /books:
+    get:
+      summary: Author => own books only. Admin => all books (optional authorId filter).
+      description: Books still in production are included with `inProduction: true` and null MRP/publicationDate.
+      parameters: [{ in: query, name: authorId, schema: { type: string }, description: Admin only }]
+      responses: { '200': { description: "{ data: Book[] }" } }
+  /events:
+    get:
+      summary: Server-Sent Events stream. Events `ticket.created` / `ticket.updated` carry `{ ticketId }`. Authors only receive their own tickets; internal notes never notify authors.
+      responses: { '200': { description: text/event-stream } }
+  /tickets:
+    get: { summary: "[author] My tickets with visible messages (no internal notes/AI data)", responses: { '200': { description: "{ data: Ticket[] }" }, '403': { $ref: '#/components/responses/Forbidden' } } }
+    post:
+      summary: "[author] Submit a ticket. Returns immediately; AI triage runs in the background."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, description]
+              properties:
+                bookId: { type: string, nullable: true, description: Must belong to the author; null = General / Account level }
+                subject: { type: string, minLength: 5, maxLength: 200 }
+                description: { type: string, minLength: 20, maxLength: 5000 }
+                attachments: { type: array, maxItems: 5, items: { type: object, properties: { name: { type: string }, size: { type: integer } } }, description: Metadata only }
+      responses: { '201': { description: Created }, '400': { description: INVALID_BOOK }, '422': { $ref: '#/components/responses/Validation' } }
+  /tickets/{id}:
+    get: { summary: "[author] One of my tickets", parameters: [{ in: path, name: id, required: true, schema: { type: integer } }], responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /tickets/{id}/messages:
+    post:
+      summary: "[author] Follow-up message. Re-opens a Resolved ticket; 409 TICKET_CLOSED if Closed."
+      parameters: [{ in: path, name: id, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [body], properties: { body: { type: string, maxLength: 5000 } } } } } }
+      responses: { '201': { description: Updated ticket }, '409': { description: TICKET_CLOSED } }
+  /admin/meta:
+    get: { summary: "[admin] Enumerations + whether AI is configured", responses: { '200': { description: OK } } }
+  /admin/stats:
+    get: { summary: "[admin] Queue counts, stale tickets, AI usage (last 30 days)", responses: { '200': { description: OK } } }
+  /admin/tickets:
+    get:
+      summary: "[admin] Ticket queue. Default sort = unresolved first, then priority, then oldest."
+      parameters:
+        - { in: query, name: status, schema: { $ref: '#/components/schemas/Status' } }
+        - { in: query, name: category, schema: { $ref: '#/components/schemas/Category' } }
+        - { in: query, name: priority, schema: { $ref: '#/components/schemas/Priority' } }
+        - { in: query, name: assigned, schema: { type: string, enum: [me, unassigned] } }
+        - { in: query, name: q, schema: { type: string }, description: Matches subject, author name, book title }
+        - { in: query, name: from, schema: { type: string, format: date } }
+        - { in: query, name: to, schema: { type: string, format: date } }
+        - { in: query, name: sort, schema: { type: string, enum: [urgency, newest, oldest], default: urgency } }
+        - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 100 } }
+        - { in: query, name: offset, schema: { type: integer, default: 0 } }
+      responses: { '200': { description: "{ data: TicketSummary[], meta: { total, limit, offset } }" } }
+  /admin/tickets/{id}:
+    get: { summary: "[admin] Full ticket: author, book, messages, internal notes, AI fields", parameters: [{ in: path, name: id, required: true, schema: { type: integer } }], responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/NotFound' } } }
+    patch:
+      summary: "[admin] Update status / category / priority / assignee. Category & priority edits are recorded as admin overrides (source = admin) and are never overwritten by AI."
+      parameters: [{ in: path, name: id, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { status: { $ref: '#/components/schemas/Status' }, category: { $ref: '#/components/schemas/Category' }, priority: { $ref: '#/components/schemas/Priority' }, assignee: { type: string, enum: [me, none] } } } } } }
+      responses: { '200': { description: Updated ticket }, '422': { $ref: '#/components/responses/Validation' } }
+  /admin/tickets/{id}/notes:
+    post: { summary: "[admin] Add an internal note (never visible to authors)", parameters: [{ in: path, name: id, required: true, schema: { type: integer } }], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [body], properties: { body: { type: string } } } } } }, responses: { '201': { description: Updated ticket } } }
+  /admin/tickets/{id}/respond:
+    post:
+      summary: "[admin] Send the (edited) reply to the author and set status (default In Progress). Auto-assigns the sender if unassigned."
+      parameters: [{ in: path, name: id, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [body], properties: { body: { type: string }, status: { type: string, enum: [In Progress, Resolved, Closed] } } } } } }
+      responses: { '201': { description: Updated ticket } }
+  /admin/tickets/{id}/draft:
+    post:
+      summary: "[admin] Get the AI draft (cached) or generate it. `regenerate: true` forces a new one."
+      description: "503 AI_UNAVAILABLE (details.fallback = manual) when the model is down, rate limited, paused by the circuit breaker, or not configured. The ticket stays fully usable."
+      parameters: [{ in: path, name: id, required: true, schema: { type: integer } }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { regenerate: { type: boolean } } } } } }
+      responses: { '200': { description: "{ data: { draft, flags[], generatedAt, cached } }" }, '503': { description: AI_UNAVAILABLE } }
+  /admin/tickets/{id}/reclassify:
+    post: { summary: "[admin] Re-run AI triage (e.g. after an outage left rule-based triage). Respects admin overrides.", parameters: [{ in: path, name: id, required: true, schema: { type: integer } }], responses: { '200': { description: Updated ticket } } }
